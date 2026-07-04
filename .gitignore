@@ -1,0 +1,8 @@
+obj/
+bin/
+*.user
+.vs/
+appsettings.Development.json
+# 如果 appsettings.json 有密碼，也加這行：
+# appsettings.json
+wwwroot/uploads/
