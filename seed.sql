@@ -6,7 +6,79 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================================
--- 1. Trips
+-- 0. 建立資料表結構 (DDL Schema)
+-- ============================================================
+
+-- 1. Trips 主表
+CREATE TABLE IF NOT EXISTS "Trips" (
+    "TripId" uuid NOT NULL,
+    "ReadOnlyId" uuid NOT NULL,
+    "Name" character varying(200) NOT NULL,
+    "StartDate" text,
+    "EndDate" text,
+    "CoverUrl" text,
+    "CreatedAt" timestamp with time zone NOT NULL DEFAULT NOW(),
+    CONSTRAINT "PK_Trips" PRIMARY KEY ("TripId")
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_Trips_ReadOnlyId" ON "Trips" ("ReadOnlyId");
+
+-- 2. TripInfos 表 (1對1 關聯 Trips)
+CREATE TABLE IF NOT EXISTS "TripInfos" (
+    "TripId" uuid NOT NULL,
+    "OutboundFlightNo" text,
+    "OutboundAirline" text,
+    "OutboundDepartureTime" text,
+    "OutboundArrivalTime" text,
+    "OutboundDepAirport" text,
+    "OutboundArrAirport" text,
+    "OutboundFlightRemark" text,
+    "OutboundImageUrl" text,
+    "InboundFlightNo" text,
+    "InboundAirline" text,
+    "InboundDepartureTime" text,
+    "InboundArrivalTime" text,
+    "InboundDepAirport" text,
+    "InboundArrAirport" text,
+    "InboundFlightRemark" text,
+    "InboundImageUrl" text,
+    "TripRemark" text,
+    CONSTRAINT "PK_TripInfos" PRIMARY KEY ("TripId"),
+    CONSTRAINT "FK_TripInfos_Trips_TripId" FOREIGN KEY ("TripId") REFERENCES "Trips" ("TripId") ON DELETE CASCADE
+);
+
+-- 3. Schedules 表 (行程明細)
+CREATE TABLE IF NOT EXISTS "Schedules" (
+    "Id" uuid NOT NULL,
+    "TripId" uuid NOT NULL,
+    "GroupId" uuid NOT NULL,
+    "Day" integer NOT NULL,
+    "Date" text,
+    "AltOrder" integer NOT NULL DEFAULT 0,
+    "SortOrder" integer NOT NULL DEFAULT 0,
+    "AttractionName" character varying(300) NOT NULL,
+    "StartTime" text,
+    "EndTime" text,
+    "Remark" text,
+    "GoogleMapLink" text,
+    "ImageUrl" text,
+    CONSTRAINT "PK_Schedules" PRIMARY KEY ("Id"),
+    CONSTRAINT "FK_Schedules_Trips_TripId" FOREIGN KEY ("TripId") REFERENCES "Trips" ("TripId") ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS "IX_Schedules_TripId_Day_SortOrder" ON "Schedules" ("TripId", "Day", "SortOrder");
+
+-- 4. PackingItems 表 (行李清單)
+CREATE TABLE IF NOT EXISTS "PackingItems" (
+    "ItemId" uuid NOT NULL,
+    "Name" character varying(200) NOT NULL,
+    "IsEssential" boolean NOT NULL DEFAULT FALSE,
+    "Checked" boolean NOT NULL DEFAULT FALSE,
+    "SortOrder" integer NOT NULL DEFAULT 0,
+    "CreatedAt" timestamp with time zone NOT NULL DEFAULT NOW(),
+    CONSTRAINT "PK_PackingItems" PRIMARY KEY ("ItemId")
+);
+
+-- ============================================================
+-- 1. Trips 範例資料
 -- ============================================================
 INSERT INTO "Trips" ("TripId", "ReadOnlyId", "Name", "StartDate", "EndDate", "CoverUrl", "CreatedAt")
 VALUES
@@ -27,7 +99,8 @@ VALUES
   '2027-01-13',
   NULL,
   NOW()
-);
+)
+ON CONFLICT ("TripId") DO NOTHING;
 
 -- ============================================================
 -- 2. TripInfos
@@ -50,7 +123,8 @@ VALUES
   'KIX', 'TPE', NULL,
   'https://drive.google.com/thumbnail?id=1wjeooB6GDYcaz2SXQd_UE5TlxoDj1YJa&sz=w1000',
   NULL
-);
+)
+ON CONFLICT ("TripId") DO NOTHING;
 
 -- ============================================================
 -- 3. PackingItems
@@ -60,7 +134,8 @@ VALUES
   ('e888879c-6e4b-44b7-84fc-635c3fe0fff3', '護照',     TRUE,  FALSE, 1, '2026-07-01 20:42:57+00'),
   ('ea5c053b-9b06-4185-8fb4-53093fdde5f4', '錢包',     TRUE,  FALSE, 2, '2026-07-01 20:43:17+00'),
   ('351b3052-4d8a-45a0-894b-aaaa2c8eebaa', '墨鏡',     FALSE, TRUE,  3, '2026-07-01 20:43:28+00'),
-  ('9b8ca65e-04b8-4707-a0a1-4b68ae0c778a', '御朱印帳', FALSE, FALSE, 4, '2026-07-01 20:44:01+00');
+  ('9b8ca65e-04b8-4707-a0a1-4b68ae0c778a', '御朱印帳', FALSE, FALSE, 4, '2026-07-01 20:44:01+00')
+ON CONFLICT ("ItemId") DO NOTHING;
 
 -- ============================================================
 -- 4. Schedules
@@ -159,5 +234,6 @@ VALUES
 ('a3f8c2d1-7e4b-4f9a-b561-8d2e0c7a3f15',9,'2026-04-12','fccfffa6-b280-413e-9643-7b8c40465b91','fccfffa6-b280-413e-9643-7b8c40465b91',0,0,'06:10','7:00','起床 (作業)','6:10起床 7:00出門',NULL),
 ('a3f8c2d1-7e4b-4f9a-b561-8d2e0c7a3f15',9,'2026-04-12','379ad8f7-1f94-4e14-838c-4ce7d1567363','379ad8f7-1f94-4e14-838c-4ce7d1567363',0,1,'10:45',NULL,'航班 MM031 (移動)','7:00 心齋橋站>御堂筋線(1站)>難波站 南海難波>ＲＡＰＩＴα 7>關西機場 8:15到機場 要到第二航廈 10:45>(MM031)>13:10',NULL),
 ('a3f8c2d1-7e4b-4f9a-b561-8d2e0c7a3f15',9,'2026-04-12','845dcdaa-d594-4608-a0d2-a387e4081545','845dcdaa-d594-4608-a0d2-a387e4081545',0,2,NULL,NULL,'往勝尾寺','大國町站>御堂筋線(10站)北大阪急行線(5站)>箕面萱野站 巴士：「箕面萱野站 阪急巴士8號乘車處」出發 箕面萱野站 → 勝尾寺','https://maps.app.goo.gl/kPs23DVxUTNUEAtW7'),
-('a3f8c2d1-7e4b-4f9a-b561-8d2e0c7a3f15',9,'2026-04-12','6f3911a0-f975-4d78-aa20-662dcf6937c7','6f3911a0-f975-4d78-aa20-662dcf6937c7',0,3,NULL,NULL,'大阪日航酒店 (住宿)',NULL,'https://maps.app.goo.gl/CPNFYi7WoNngxDJL6');
+('a3f8c2d1-7e4b-4f9a-b561-8d2e0c7a3f15',9,'2026-04-12','6f3911a0-f975-4d78-aa20-662dcf6937c7','6f3911a0-f975-4d78-aa20-662dcf6937c7',0,3,NULL,NULL,'大阪日航酒店 (住宿)',NULL,'https://maps.app.goo.gl/CPNFYi7WoNngxDJL6')
+ON CONFLICT ("Id") DO NOTHING;
 
