@@ -1,10 +1,20 @@
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using TravelApp.Api.Data;
+using TravelApp.Api.Services;
 
 // 初始化 Web 應用程式建構器
 var builder = WebApplication.CreateBuilder(args);
 
 // ── 註冊服務到 DI 容器 ─────────────────────────────────────────
+
+// 註冊 HttpClient 供 Google Token 驗證等外網通訊使用
+builder.Services.AddHttpClient();
+
+// 註冊權限驗證服務
+builder.Services.AddScoped<TripAuthService>();
 
 // 註冊 Controller 控制器
 builder.Services.AddControllers()
@@ -18,6 +28,28 @@ builder.Services.AddOpenApi();
 // 註冊 PostgreSQL 資料庫上下文 (EF Core)
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// 設定 JWT Bearer 身份驗證服務
+var jwtSecret = builder.Configuration["Jwt:Secret"] ?? "travel-app-secure-jwt-secret-key-2026-very-strong-and-long!";
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "TravelApp.Api";
+var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "TravelApp.Client";
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtAudience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+    });
+builder.Services.AddAuthorization();
 
 // 設定跨來源資源共用 (CORS) — 允許前端 React 測試環境與 GitHub Pages 正式網域呼叫
 builder.Services.AddCors(options =>
@@ -66,13 +98,14 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-// 啟用靜態檔案服務，以便存取上傳的圖片
+// 啟用靜態檔案服務
 app.UseStaticFiles();
 
 // 啟用 CORS
 app.UseCors("AllowFrontend");
 
-// 啟用授權 (Authorization)
+// 啟用身份驗證 (Authentication) 與授權 (Authorization)
+app.UseAuthentication();
 app.UseAuthorization();
 
 // 健康檢查端點 (Keep-Alive 用，提供 UptimeRobot 定期 ping 避免 Render 雲端休眠)

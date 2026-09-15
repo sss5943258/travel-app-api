@@ -2,25 +2,36 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TravelApp.Api.Data;
 using TravelApp.Api.Models;
+using TravelApp.Api.Services;
 
 namespace TravelApp.Api.Controllers;
 
 /// <summary>
-/// 旅行攜帶品項管理 API 控制器，提供物品清單的取得、新增、刪除、及狀態切換等功能
+/// 旅行攜帶品項管理 API 控制器，提供個人物品清單的取得、新增、刪除、及狀態切換等功能 (支援多租戶資料隔離)
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
 public class PackingItemsController(AppDbContext db) : ControllerBase
 {
     /// <summary>
-    /// 取得所有攜帶物品清單 (依 SortOrder 與建立時間排序)
+    /// 取得當前登入者的攜帶物品清單 (依 SortOrder 與建立時間排序)
     /// </summary>
     /// <returns>攜帶物品清單</returns>
     // GET api/packingitems
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
-        var items = await db.PackingItems
+        var currentUserId = TripAuthService.GetUserId(User);
+
+        var query = db.PackingItems.AsNoTracking();
+
+        // 若有登入者，篩選屬於該使用者或是尚未綁定使用者的通用預設物品
+        if (!string.IsNullOrEmpty(currentUserId))
+        {
+            query = query.Where(p => p.UserId == currentUserId || p.UserId == null);
+        }
+
+        var items = await query
             .OrderBy(p => p.SortOrder)
             .ThenBy(p => p.CreatedAt)
             .ToListAsync();
@@ -29,7 +40,7 @@ public class PackingItemsController(AppDbContext db) : ControllerBase
     }
 
     /// <summary>
-    /// 新增一筆待攜帶物品項目
+    /// 新增一筆待攜帶物品項目 (自動綁定當前登入使用者)
     /// </summary>
     /// <param name="req">新增品項請求參數</param>
     /// <returns>新增成功的品項詳細資料</returns>
@@ -38,15 +49,22 @@ public class PackingItemsController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> Add([FromBody] AddPackingItemRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
-            return BadRequest(new { error = "品項名稱為必填" });
+            return BadRequest(new { status = "error", message = "品項名稱為必填" });
 
-        var maxSort = await db.PackingItems.MaxAsync(p => (int?)p.SortOrder) ?? 0;
+        var currentUserId = TripAuthService.GetUserId(User);
+
+        var maxSort = await db.PackingItems
+            .Where(p => p.UserId == currentUserId)
+            .MaxAsync(p => (int?)p.SortOrder) ?? 0;
 
         var item = new PackingItem
         {
+            ItemId = Guid.NewGuid(),
             Name = req.Name.Trim(),
             IsEssential = req.IsEssential,
-            SortOrder = maxSort + 1
+            SortOrder = maxSort + 1,
+            UserId = currentUserId,
+            CreatedAt = DateTime.UtcNow
         };
 
         db.PackingItems.Add(item);
@@ -65,11 +83,17 @@ public class PackingItemsController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> Delete(Guid id)
     {
         var item = await db.PackingItems.FindAsync(id);
-        if (item == null) return NotFound();
+        if (item == null) return NotFound(new { status = "error", message = "找不到此物品" });
+
+        var currentUserId = TripAuthService.GetUserId(User);
+        if (!string.IsNullOrEmpty(item.UserId) && item.UserId != currentUserId)
+        {
+            return StatusCode(403, new { status = "error", message = "無權限刪除其他人的行李品項" });
+        }
 
         db.PackingItems.Remove(item);
         await db.SaveChangesAsync();
-        return Ok(new { status = "success" });
+        return Ok(new { status = "success", message = "物品已刪除" });
     }
 
     /// <summary>
@@ -83,7 +107,13 @@ public class PackingItemsController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> Toggle(Guid id, [FromBody] ToggleRequest req)
     {
         var item = await db.PackingItems.FindAsync(id);
-        if (item == null) return NotFound();
+        if (item == null) return NotFound(new { status = "error", message = "找不到此物品" });
+
+        var currentUserId = TripAuthService.GetUserId(User);
+        if (!string.IsNullOrEmpty(item.UserId) && item.UserId != currentUserId)
+        {
+            return StatusCode(403, new { status = "error", message = "無權限編輯其他人的行李品項" });
+        }
 
         item.Checked = req.Checked;
         await db.SaveChangesAsync();
@@ -92,16 +122,5 @@ public class PackingItemsController(AppDbContext db) : ControllerBase
     }
 }
 
-/// <summary>
-/// 新增待攜帶物品項目的 DTO 請求格式
-/// </summary>
-/// <param name="Name">物品名稱 (必填)</param>
-/// <param name="IsEssential">是否為必備物品</param>
 public record AddPackingItemRequest(string Name, bool IsEssential);
-
-/// <summary>
-/// 切換物品已確認狀態的 DTO 請求格式
-/// </summary>
-/// <param name="Checked">是否已勾選確認</param>
 public record ToggleRequest(bool Checked);
-

@@ -36,6 +36,11 @@ public class Trip
     public string? CoverUrl { get; set; }
 
     /// <summary>
+    /// 擁有者使用者識別碼 (Google sub)
+    /// </summary>
+    public string? UserId { get; set; }
+
+    /// <summary>
     /// 建立時間
     /// </summary>
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -51,5 +56,10 @@ public class Trip
     /// 關聯的行程明細清單 (1對多)
     /// </summary>
     public ICollection<Schedule> Schedules { get; set; } = [];
+
+    /// <summary>
+    /// 關聯的共編者名單 (1對多)
+    /// </summary>
+    public ICollection<TripCollaborator> Collaborators { get; set; } = [];
 }
 

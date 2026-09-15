@@ -2,31 +2,38 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TravelApp.Api.Data;
 using TravelApp.Api.Models;
+using TravelApp.Api.Services;
 
 namespace TravelApp.Api.Controllers;
 
 /// <summary>
-/// 行程明細管理 API 控制器，提供行程項目的新增、編輯、刪除與重新排序等功能
+/// 行程明細管理 API 控制器，提供行程卡片的新增、編輯、刪除與備案排序轉正等功能
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
-public class SchedulesController(AppDbContext db) : ControllerBase
+public class SchedulesController(AppDbContext db, TripAuthService auth) : ControllerBase
 {
     /// <summary>
     /// 新增一筆行程卡片項目 (或是為既有行程新增備案)
     /// </summary>
     /// <param name="req">行程新增請求參數</param>
-    /// <returns>新增成功的 ID</returns>
+    /// <returns>新增成功的 ID 與完整物件</returns>
     // POST api/schedules
     [HttpPost]
     public async Task<IActionResult> Add([FromBody] AddScheduleRequest req)
     {
         if (!await db.Trips.AnyAsync(t => t.TripId == req.TripId))
-            return NotFound(new { error = "找不到旅程" });
+            return NotFound(new { status = "error", message = "找不到旅程" });
 
-        var groupId = req.GroupId ?? Guid.NewGuid();
+        if (!await auth.CanEditAsync(req.TripId, User))
+            return StatusCode(403, new { status = "error", message = "無編輯權限或非此旅程擁有者/共編者" });
+
+        var scheduleId = Guid.NewGuid();
+        var groupId = req.GroupId ?? scheduleId; // 若未傳 groupId 則以自身 ID 作為群組起始 ID
+
         var schedule = new Schedule
         {
+            Id = scheduleId,
             TripId = req.TripId,
             GroupId = groupId,
             Day = req.Day,
@@ -36,6 +43,7 @@ public class SchedulesController(AppDbContext db) : ControllerBase
             EndTime = req.EndTime,
             Remark = req.Remark,
             GoogleMapLink = req.GoogleMapLink,
+            ImageUrl = req.ImageUrl,
             SortOrder = req.SortOrder,
             AltOrder = req.AltOrder
         };
@@ -43,11 +51,16 @@ public class SchedulesController(AppDbContext db) : ControllerBase
         db.Schedules.Add(schedule);
         await db.SaveChangesAsync();
 
-        return Ok(new { status = "success", id = schedule.Id });
+        return Ok(new
+        {
+            status = "success",
+            id = schedule.Id,
+            data = schedule
+        });
     }
 
     /// <summary>
-    /// 更新特定行程明細內容 (例如時間、景點名稱、備註等)
+    /// 更新特定行程明細內容 (景點名稱、時間、備註、地圖等)
     /// </summary>
     /// <param name="id">行程 ID</param>
     /// <param name="req">更新參數</param>
@@ -57,16 +70,21 @@ public class SchedulesController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateScheduleRequest req)
     {
         var schedule = await db.Schedules.FindAsync(id);
-        if (schedule == null) return NotFound();
+        if (schedule == null) return NotFound(new { status = "error", message = "找不到行程項目" });
+
+        if (!await auth.CanEditAsync(schedule.TripId, User))
+            return StatusCode(403, new { status = "error", message = "無編輯權限或非此旅程擁有者/共編者" });
 
         schedule.AttractionName = req.AttractionName ?? schedule.AttractionName;
         schedule.StartTime = req.StartTime ?? schedule.StartTime;
         schedule.EndTime = req.EndTime ?? schedule.EndTime;
         schedule.Remark = req.Remark ?? schedule.Remark;
         schedule.GoogleMapLink = req.GoogleMapLink ?? schedule.GoogleMapLink;
+        schedule.ImageUrl = req.ImageUrl ?? schedule.ImageUrl;
+        if (req.Date is not null) schedule.Date = req.Date;
 
         await db.SaveChangesAsync();
-        return Ok(new { status = "success" });
+        return Ok(new { status = "success", message = "行程更新成功" });
     }
 
     /// <summary>
@@ -79,22 +97,64 @@ public class SchedulesController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> Delete(Guid id)
     {
         var schedule = await db.Schedules.FindAsync(id);
-        if (schedule == null) return NotFound();
+        if (schedule == null) return NotFound(new { status = "error", message = "找不到行程項目" });
+
+        if (!await auth.CanEditAsync(schedule.TripId, User))
+            return StatusCode(403, new { status = "error", message = "無編輯權限或非此旅程擁有者/共編者" });
 
         db.Schedules.Remove(schedule);
         await db.SaveChangesAsync();
-        return Ok(new { status = "success" });
+        return Ok(new { status = "success", message = "行程已成功刪除" });
     }
 
     /// <summary>
-    /// 行程重新排序 (拖曳調整卡片順序後呼叫，更新特定旅程特定天數的所有群組 SortOrder)
+    /// 改變同一個行程群組內的備案順序與轉正主要行程
     /// </summary>
-    /// <param name="req">重新排序參數 (包含重排後的 GroupId 順序清單)</param>
+    /// <param name="groupId">群組 ID</param>
+    /// <param name="req">包含 orderedIds 的重排請求物件</param>
     /// <returns>成功狀態</returns>
+    // PUT api/groups/{groupId}/reorder-backups
+    [HttpPut("/api/groups/{groupId:guid}/reorder-backups")]
+    public async Task<IActionResult> ReorderGroupBackups(Guid groupId, [FromBody] ReorderBackupsRequest req)
+    {
+        var schedules = await db.Schedules
+            .Where(s => s.GroupId == groupId)
+            .ToListAsync();
+
+        if (schedules.Count == 0)
+        {
+            return NotFound(new { status = "error", message = $"找不到群組: {groupId}" });
+        }
+
+        var tripId = schedules.First().TripId;
+        if (!await auth.CanEditAsync(tripId, User))
+            return StatusCode(403, new { status = "error", message = "無編輯權限或非此旅程擁有者/共編者" });
+
+        var orderedIds = req.OrderedIds ?? [];
+        for (int i = 0; i < orderedIds.Count; i++)
+        {
+            var targetId = orderedIds[i];
+            var s = schedules.FirstOrDefault(x => x.Id == targetId);
+            if (s != null)
+            {
+                s.AltOrder = i; // 第一個轉正為 0 (主要行程)，其餘 1, 2, ... 為備案
+            }
+        }
+
+        await db.SaveChangesAsync();
+        return Ok(new { status = "success", message = "備案排序與轉正更新成功" });
+    }
+
+    /// <summary>
+    /// 舊版相容：行程卡片依 GroupId 重新排序
+    /// </summary>
     // PUT api/schedules/reorder
     [HttpPut("reorder")]
     public async Task<IActionResult> Reorder([FromBody] ReorderRequest req)
     {
+        if (!await auth.CanEditAsync(req.TripId, User))
+            return StatusCode(403, new { status = "error", message = "無編輯權限" });
+
         var schedules = await db.Schedules
             .Where(s => s.TripId == req.TripId && s.Day == req.Day)
             .ToListAsync();
@@ -111,23 +171,14 @@ public class SchedulesController(AppDbContext db) : ControllerBase
     }
 }
 
-/// <summary>
-/// 新增行程的 DTO 請求格式
-/// </summary>
 public record AddScheduleRequest(
     Guid TripId, int Day, string? Date, string AttractionName,
     string? StartTime, string? EndTime, string? Remark,
-    string? GoogleMapLink, int SortOrder, int AltOrder, Guid? GroupId);
+    string? GoogleMapLink, string? ImageUrl, int SortOrder, int AltOrder, Guid? GroupId);
 
-/// <summary>
-/// 更新行程的 DTO 請求格式 (可選更新欄位)
-/// </summary>
 public record UpdateScheduleRequest(
     string? AttractionName, string? StartTime, string? EndTime,
-    string? Remark, string? GoogleMapLink);
+    string? Remark, string? GoogleMapLink, string? ImageUrl, string? Date);
 
-/// <summary>
-/// 重新排序行程的 DTO 請求格式
-/// </summary>
 public record ReorderRequest(Guid TripId, int Day, List<Guid> OrderedGroupIds);
-
+public record ReorderBackupsRequest(Guid? TripId, Guid? GroupId, List<Guid>? OrderedIds);

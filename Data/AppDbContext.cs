@@ -30,6 +30,26 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<PackingItem> PackingItems => Set<PackingItem>();
 
     /// <summary>
+    /// 使用者資料表 (Google 授權帳號)
+    /// </summary>
+    public DbSet<User> Users => Set<User>();
+
+    /// <summary>
+    /// 使用者登入 Session 與 RefreshToken 資料表
+    /// </summary>
+    public DbSet<UserSession> UserSessions => Set<UserSession>();
+
+    /// <summary>
+    /// 旅程共編者資料表
+    /// </summary>
+    public DbSet<TripCollaborator> TripCollaborators => Set<TripCollaborator>();
+
+    /// <summary>
+    /// 上傳圖片二進位持久化資料表
+    /// </summary>
+    public DbSet<UploadedImage> UploadedImages => Set<UploadedImage>();
+
+    /// <summary>
     /// 設定 Entity 之間的關聯、索引與欄位約束
     /// </summary>
     /// <param name="modelBuilder">模型建構器</param>
@@ -41,6 +61,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasKey(t => t.TripId);
             e.Property(t => t.Name).IsRequired().HasMaxLength(200);
             e.HasIndex(t => t.ReadOnlyId).IsUnique(); // 唯讀分享識別碼必需唯一且建立索引以加速查詢
+            e.HasIndex(t => t.UserId); // 依使用者查詢旅程加速
         });
 
         // TripInfo — 設定與 Trip 之間的一對一關聯 (1:1 with Trip)
@@ -70,6 +91,42 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.HasKey(p => p.ItemId);
             e.Property(p => p.Name).IsRequired().HasMaxLength(200);
+            e.HasIndex(p => p.UserId); // 依使用者篩選行李清單加速
+        });
+
+        // User 使用者約束設定
+        modelBuilder.Entity<User>(e =>
+        {
+            e.HasKey(u => u.UserId);
+            e.HasIndex(u => u.Email).IsUnique();
+        });
+
+        // UserSession 階段約束設定
+        modelBuilder.Entity<UserSession>(e =>
+        {
+            e.HasKey(s => s.SessionId);
+            e.HasIndex(s => s.RefreshToken).IsUnique();
+            e.HasOne(s => s.User)
+             .WithMany()
+             .HasForeignKey(s => s.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // TripCollaborator 旅程共編者約束設定 (複合主鍵)
+        modelBuilder.Entity<TripCollaborator>(e =>
+        {
+            e.HasKey(c => new { c.TripId, c.UserEmail });
+            e.Property(c => c.UserEmail).IsRequired().HasMaxLength(200);
+            e.HasOne(c => c.Trip)
+             .WithMany(t => t.Collaborators)
+             .HasForeignKey(c => c.TripId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // UploadedImage 上傳圖片約束設定
+        modelBuilder.Entity<UploadedImage>(e =>
+        {
+            e.HasKey(i => i.ImageId);
         });
     }
 }

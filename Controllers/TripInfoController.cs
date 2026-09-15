@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TravelApp.Api.Data;
 using TravelApp.Api.Models;
+using TravelApp.Api.Services;
 
 namespace TravelApp.Api.Controllers;
 
@@ -10,7 +11,7 @@ namespace TravelApp.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/trips/{tripId:guid}/info")]
-public class TripInfoController(AppDbContext db) : ControllerBase
+public class TripInfoController(AppDbContext db, TripAuthService auth) : ControllerBase
 {
     /// <summary>
     /// 更新或新增旅程詳細航班與備註資訊 (若對應的 TripInfo 不存在則新增，存在則進行部分更新)
@@ -24,6 +25,9 @@ public class TripInfoController(AppDbContext db) : ControllerBase
     {
         if (!await db.Trips.AnyAsync(t => t.TripId == tripId))
             return NotFound(new { error = "找不到旅程" });
+
+        if (!await auth.CanEditAsync(tripId, User))
+            return StatusCode(403, new { error = "無編輯權限或非此旅程擁有者/共編者" });
 
         var info = await db.TripInfos.FindAsync(tripId);
 
@@ -57,11 +61,11 @@ public class TripInfoController(AppDbContext db) : ControllerBase
     }
 
     /// <summary>
-    /// 上傳圖片至本地 (以 base64 傳入並解碼儲存於 wwwroot/uploads/)
+    /// 上傳圖片並持久化儲存於 Neon 資料庫中 (解決 Render 免費容器休眠重啟時丟圖問題)
     /// </summary>
     /// <param name="tripId">旅程 ID</param>
     /// <param name="req">上傳請求參數</param>
-    /// <returns>回傳上傳後的圖片網址</returns>
+    /// <returns>回傳上傳後的持久化圖片網址</returns>
     // POST api/trips/{tripId}/info/upload
     [HttpPost("upload")]
     public async Task<IActionResult> Upload(Guid tripId, [FromBody] UploadImageRequest req)
@@ -69,37 +73,71 @@ public class TripInfoController(AppDbContext db) : ControllerBase
         if (!await db.Trips.AnyAsync(t => t.TripId == tripId))
             return NotFound(new { error = "找不到旅程" });
 
+        if (!await auth.CanEditAsync(tripId, User))
+            return StatusCode(403, new { error = "無編輯權限或非此旅程擁有者/共編者" });
+
         if (string.IsNullOrEmpty(req.ImageBase64))
             return BadRequest(new { error = "缺少圖片資料" });
 
         try
         {
-            // 解析 Base64，移除 data:image/png;base64, 等前綴
+            // 解析 Base64
             var base64Parts = req.ImageBase64.Split(',');
+            var contentType = "image/png";
+
+            if (base64Parts.Length > 1)
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(base64Parts[0], @"data:(.*?);");
+                if (match.Success) contentType = match.Groups[1].Value;
+            }
+
             var base64Data = base64Parts.Length > 1 ? base64Parts[1] : base64Parts[0];
             var bytes = Convert.FromBase64String(base64Data);
 
-            // 確保 wwwroot/uploads 目錄存在
-            var uploadDir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads");
-            if (!Directory.Exists(uploadDir))
+            // 存入 Neon PostgreSQL UploadedImages 資料表
+            var uploadedImage = new UploadedImage
             {
-                Directory.CreateDirectory(uploadDir);
-            }
+                TripId = tripId,
+                ContentType = contentType,
+                FileName = req.FileName,
+                Data = bytes,
+                CreatedAt = DateTime.UtcNow
+            };
+            db.UploadedImages.Add(uploadedImage);
 
-            var extension = Path.GetExtension(req.FileName) ?? ".png";
-            if (string.IsNullOrEmpty(extension)) extension = ".png";
-            var newFileName = $"{tripId}_{req.Type}_{DateTime.UtcNow.Ticks}{extension}";
-            var filePath = Path.Combine(uploadDir, newFileName);
-
-            await System.IO.File.WriteAllBytesAsync(filePath, bytes);
-
-            // 組合靜態網址
+            // 組合 API 圖片網址
             var request = HttpContext.Request;
             var host = request.Host.Value;
             var scheme = request.Scheme;
-            var imageUrl = $"{scheme}://{host}/uploads/{newFileName}";
+            var imageUrl = $"{scheme}://{host}/api/images/{uploadedImage.ImageId}";
 
-            return Ok(new { status = "success", imageUrl });
+            // 同步寫入對應的 TripInfo 欄位
+            var info = await db.TripInfos.FindAsync(tripId);
+            if (info == null)
+            {
+                info = new TripInfo { TripId = tripId };
+                db.TripInfos.Add(info);
+            }
+
+            var fieldName = req.Type == "outbound" ? "outboundImageUrl" : "inboundImageUrl";
+            if (req.Type == "outbound")
+            {
+                info.OutboundImageUrl = imageUrl;
+            }
+            else
+            {
+                info.InboundImageUrl = imageUrl;
+            }
+
+            await db.SaveChangesAsync();
+
+            return Ok(new
+            {
+                status = "success",
+                message = "圖片上傳成功",
+                imageUrl,
+                fieldName
+            });
         }
         catch (Exception ex)
         {

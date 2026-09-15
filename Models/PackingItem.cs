@@ -31,6 +31,11 @@ public class PackingItem
     public int SortOrder { get; set; } = 0;
 
     /// <summary>
+    /// 所屬使用者識別碼 (Google sub)
+    /// </summary>
+    public string? UserId { get; set; }
+
+    /// <summary>
     /// 建立時間
     /// </summary>
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

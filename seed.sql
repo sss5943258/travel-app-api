@@ -17,12 +17,61 @@ CREATE TABLE IF NOT EXISTS "Trips" (
     "StartDate" text,
     "EndDate" text,
     "CoverUrl" text,
+    "UserId" text,
     "CreatedAt" timestamp with time zone NOT NULL DEFAULT NOW(),
     CONSTRAINT "PK_Trips" PRIMARY KEY ("TripId")
 );
+ALTER TABLE "Trips" ADD COLUMN IF NOT EXISTS "UserId" text;
 CREATE UNIQUE INDEX IF NOT EXISTS "IX_Trips_ReadOnlyId" ON "Trips" ("ReadOnlyId");
+CREATE INDEX IF NOT EXISTS "IX_Trips_UserId" ON "Trips" ("UserId");
 
--- 2. TripInfos 表 (1對1 關聯 Trips)
+-- 2. Users 使用者表 (Google OAuth)
+CREATE TABLE IF NOT EXISTS "Users" (
+    "UserId" character varying(100) NOT NULL,
+    "Email" character varying(200) NOT NULL,
+    "Name" character varying(200) NOT NULL,
+    "Picture" text,
+    "CreatedAt" timestamp with time zone NOT NULL DEFAULT NOW(),
+    "LastLoginAt" timestamp with time zone NOT NULL DEFAULT NOW(),
+    CONSTRAINT "PK_Users" PRIMARY KEY ("UserId")
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_Users_Email" ON "Users" ("Email");
+
+-- 3. UserSessions 登入階段表 (RefreshToken)
+CREATE TABLE IF NOT EXISTS "UserSessions" (
+    "SessionId" uuid NOT NULL,
+    "UserId" character varying(100) NOT NULL,
+    "RefreshToken" text NOT NULL,
+    "RefreshExpiresAt" timestamp with time zone NOT NULL,
+    "IsRevoked" boolean NOT NULL DEFAULT FALSE,
+    "CreatedAt" timestamp with time zone NOT NULL DEFAULT NOW(),
+    CONSTRAINT "PK_UserSessions" PRIMARY KEY ("SessionId"),
+    CONSTRAINT "FK_UserSessions_Users_UserId" FOREIGN KEY ("UserId") REFERENCES "Users" ("UserId") ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_UserSessions_RefreshToken" ON "UserSessions" ("RefreshToken");
+
+-- 4. TripCollaborators 旅程共編者表
+CREATE TABLE IF NOT EXISTS "TripCollaborators" (
+    "TripId" uuid NOT NULL,
+    "UserEmail" character varying(200) NOT NULL,
+    "Role" character varying(50) NOT NULL DEFAULT 'editor',
+    "AddedAt" timestamp with time zone NOT NULL DEFAULT NOW(),
+    CONSTRAINT "PK_TripCollaborators" PRIMARY KEY ("TripId", "UserEmail"),
+    CONSTRAINT "FK_TripCollaborators_Trips_TripId" FOREIGN KEY ("TripId") REFERENCES "Trips" ("TripId") ON DELETE CASCADE
+);
+
+-- 5. UploadedImages 圖片持久化表 (Neon DB BYTEA)
+CREATE TABLE IF NOT EXISTS "UploadedImages" (
+    "ImageId" uuid NOT NULL,
+    "TripId" uuid,
+    "ContentType" character varying(50) NOT NULL DEFAULT 'image/png',
+    "FileName" text,
+    "Data" bytea NOT NULL,
+    "CreatedAt" timestamp with time zone NOT NULL DEFAULT NOW(),
+    CONSTRAINT "PK_UploadedImages" PRIMARY KEY ("ImageId")
+);
+
+-- 6. TripInfos 表 (1對1 關聯 Trips)
 CREATE TABLE IF NOT EXISTS "TripInfos" (
     "TripId" uuid NOT NULL,
     "OutboundFlightNo" text,
@@ -46,7 +95,7 @@ CREATE TABLE IF NOT EXISTS "TripInfos" (
     CONSTRAINT "FK_TripInfos_Trips_TripId" FOREIGN KEY ("TripId") REFERENCES "Trips" ("TripId") ON DELETE CASCADE
 );
 
--- 3. Schedules 表 (行程明細)
+-- 7. Schedules 表 (行程明細)
 CREATE TABLE IF NOT EXISTS "Schedules" (
     "Id" uuid NOT NULL,
     "TripId" uuid NOT NULL,
@@ -66,16 +115,19 @@ CREATE TABLE IF NOT EXISTS "Schedules" (
 );
 CREATE INDEX IF NOT EXISTS "IX_Schedules_TripId_Day_SortOrder" ON "Schedules" ("TripId", "Day", "SortOrder");
 
--- 4. PackingItems 表 (行李清單)
+-- 8. PackingItems 表 (行李清單)
 CREATE TABLE IF NOT EXISTS "PackingItems" (
     "ItemId" uuid NOT NULL,
     "Name" character varying(200) NOT NULL,
     "IsEssential" boolean NOT NULL DEFAULT FALSE,
     "Checked" boolean NOT NULL DEFAULT FALSE,
     "SortOrder" integer NOT NULL DEFAULT 0,
+    "UserId" text,
     "CreatedAt" timestamp with time zone NOT NULL DEFAULT NOW(),
     CONSTRAINT "PK_PackingItems" PRIMARY KEY ("ItemId")
 );
+ALTER TABLE "PackingItems" ADD COLUMN IF NOT EXISTS "UserId" text;
+CREATE INDEX IF NOT EXISTS "IX_PackingItems_UserId" ON "PackingItems" ("UserId");
 
 -- ============================================================
 -- 1. Trips 範例資料
