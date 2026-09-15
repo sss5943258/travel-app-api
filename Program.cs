@@ -19,14 +19,16 @@ builder.Services.AddOpenApi();
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// 設定跨來源資源共用 (CORS) — 允許前端 React 測試環境跨網域呼叫
+// 設定跨來源資源共用 (CORS) — 允許前端 React 測試環境與 GitHub Pages 正式網域呼叫
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
-        policy.WithOrigins(
-            "http://localhost:5173",   // Vite 預設 dev 伺服器
-            "http://localhost:3000"    // 備用或其他常見 react 伺服器
-        )
+        policy.SetIsOriginAllowed(origin =>
+            // 允許本機 vite 或其他本地 port
+            origin.StartsWith("http://localhost:") ||
+            origin.StartsWith("https://localhost:") ||
+            // 允許 GitHub Pages 網域 (*.github.io)
+            origin.EndsWith(".github.io"))
         .AllowAnyHeader()
         .AllowAnyMethod());
 });
@@ -36,15 +38,32 @@ var app = builder.Build();
 
 // ── 設定 HTTP 請求管道 (Middleware 中介軟體) ───────────────────────
 
+// 開發或雲端環境啟動時：自動確保資料庫結構存在，並在全空時自動注入 seed.sql 範例資料
+try
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.EnsureCreated();
+
+    if (!db.Trips.Any())
+    {
+        var seedPath = Path.Combine(app.Environment.ContentRootPath, "seed.sql");
+        if (File.Exists(seedPath))
+        {
+            var sql = File.ReadAllText(seedPath);
+            db.Database.ExecuteSqlRaw(sql);
+        }
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[DB 初始化警告] {ex.Message}");
+}
+
 if (app.Environment.IsDevelopment())
 {
     // 開發環境下啟用 OpenAPI endpoint
     app.MapOpenApi();
-
-    // 開發環境下，直接自動建庫建表（免 Migration 檔案）
-    using var scope = app.Services.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.EnsureCreated();
 }
 
 // 啟用靜態檔案服務，以便存取上傳的圖片
@@ -55,6 +74,9 @@ app.UseCors("AllowFrontend");
 
 // 啟用授權 (Authorization)
 app.UseAuthorization();
+
+// 健康檢查端點 (Keep-Alive 用，提供 UptimeRobot 定期 ping 避免 Render 雲端休眠)
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
 // 對應 Controller 路由
 app.MapControllers();

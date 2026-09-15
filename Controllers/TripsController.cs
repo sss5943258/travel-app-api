@@ -67,21 +67,37 @@ public class TripsController(AppDbContext db) : ControllerBase
             isReadOnly = true;
         }
 
-        // 依 Day 分組
-        var journeys = trip.Schedules
-            .OrderBy(s => s.Day).ThenBy(s => s.SortOrder)
-            .GroupBy(s => s.Day)
-            .Select(g => new
-            {
-                Day = g.Key,
-                Date = g.First().Date,
-                Schedule = g.Select(s => new
+        // 依 Day 分組並保全空天數 (Day 1 ~ Day N)
+        int maxCardDay = trip.Schedules.Any() ? trip.Schedules.Max(s => s.Day) : 0;
+        int dateDays = 0;
+        DateTime? startDate = null;
+
+        if (!string.IsNullOrEmpty(trip.StartDate) && !string.IsNullOrEmpty(trip.EndDate)
+            && DateTime.TryParse(trip.StartDate, out var start)
+            && DateTime.TryParse(trip.EndDate, out var end)
+            && end >= start)
+        {
+            startDate = start;
+            dateDays = (int)(end - start).TotalDays + 1;
+        }
+
+        int totalDays = Math.Max(dateDays, maxCardDay);
+
+        var journeys = new List<object>();
+        for (int i = 1; i <= totalDays; i++)
+        {
+            var dayNum = i;
+            var dayDate = startDate.HasValue ? startDate.Value.AddDays(dayNum - 1).ToString("yyyy-MM-dd") : null;
+            var daySchedules = trip.Schedules
+                .Where(s => s.Day == dayNum)
+                .OrderBy(s => s.SortOrder)
+                .Select(s => new
                 {
                     s.Id,
                     s.GroupId,
                     s.TripId,
                     s.Day,
-                    s.Date,
+                    Date = s.Date ?? dayDate,
                     s.AltOrder,
                     s.SortOrder,
                     s.AttractionName,
@@ -91,7 +107,15 @@ public class TripsController(AppDbContext db) : ControllerBase
                     s.GoogleMapLink,
                     s.ImageUrl
                 })
+                .ToList();
+
+            journeys.Add(new
+            {
+                Day = dayNum,
+                Date = daySchedules.FirstOrDefault()?.Date ?? dayDate,
+                Schedule = daySchedules
             });
+        }
 
         return Ok(new
         {
@@ -108,7 +132,7 @@ public class TripsController(AppDbContext db) : ControllerBase
     }
 
     /// <summary>
-    /// 建立一趟新旅程，若有提供起迄日期，會自動生成每日行程的佔位卡片
+    /// 建立一趟新旅程 (不預塞任何佔位卡片，每一天均為乾淨空天數)
     /// </summary>
     /// <param name="req">建立旅程請求參數</param>
     /// <returns>新增成功的狀態與 UUIDs</returns>
@@ -127,31 +151,8 @@ public class TripsController(AppDbContext db) : ControllerBase
         };
 
         db.Trips.Add(trip);
-
-        // 自動產生每日佔位 schedule
-        if (!string.IsNullOrEmpty(req.StartDate) && !string.IsNullOrEmpty(req.EndDate)
-            && DateTime.TryParse(req.StartDate, out var start)
-            && DateTime.TryParse(req.EndDate, out var end))
-        {
-            int totalDays = (int)(end - start).TotalDays + 1;
-            for (int i = 0; i < totalDays; i++)
-            {
-                var date = start.AddDays(i);
-                var groupId = Guid.NewGuid();
-                db.Schedules.Add(new Schedule
-                {
-                    TripId = trip.TripId,
-                    GroupId = groupId,
-                    Day = i + 1,
-                    Date = date.ToString("yyyy-MM-dd"),
-                    AttractionName = "（待新增）",
-                    SortOrder = 0,
-                    AltOrder = 0
-                });
-            }
-        }
-
         await db.SaveChangesAsync();
+
         return Ok(new { status = "success", tripId = trip.TripId, readOnlyId = trip.ReadOnlyId });
     }
 
