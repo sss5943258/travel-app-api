@@ -108,8 +108,19 @@ app.UseCors("AllowFrontend");
 app.UseAuthentication();
 app.UseAuthorization();
 
-// 健康檢查端點 (Keep-Alive 用，提供 UptimeRobot 定期 ping 避免 Render 雲端休眠)
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+// 健康檢查與資料庫連線診斷端點
+app.MapGet("/health", async (AppDbContext db) =>
+{
+    try
+    {
+        var canConnect = await db.Database.CanConnectAsync();
+        return Results.Ok(new { status = "healthy", db = canConnect ? "connected" : "disconnected", timestamp = DateTime.UtcNow });
+    }
+    catch (Exception ex)
+    {
+        return Results.Ok(new { status = "healthy", db = "error", error = ex.Message, timestamp = DateTime.UtcNow });
+    }
+});
 
 // 對應 Controller 路由
 app.MapControllers();
