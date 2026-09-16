@@ -188,7 +188,10 @@ public class AuthController(
     /// <returns>Token 字串與過期時間</returns>
     private (string token, DateTime expiresAt) GenerateJwtToken(User user)
     {
-        var secret = config["Jwt:Secret"] ?? "travel-app-secure-jwt-secret-key-2026-very-strong-and-long!";
+        var rawSecret = config["Jwt:Secret"];
+        var secret = !string.IsNullOrWhiteSpace(rawSecret)
+            ? rawSecret
+            : "travel-app-dev-fallback-secret-key-must-be-at-least-256-bits-long!";
         var issuer = config["Jwt:Issuer"] ?? "TravelApp.Api";
         var audience = config["Jwt:Audience"] ?? "TravelApp.Client";
 

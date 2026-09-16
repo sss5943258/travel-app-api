@@ -30,7 +30,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // 設定 JWT Bearer 身份驗證服務
-var jwtSecret = builder.Configuration["Jwt:Secret"] ?? "travel-app-secure-jwt-secret-key-2026-very-strong-and-long!";
+var rawJwtSecret = builder.Configuration["Jwt:Secret"];
+var jwtSecret = !string.IsNullOrWhiteSpace(rawJwtSecret)
+    ? rawJwtSecret
+    : "travel-app-dev-fallback-secret-key-must-be-at-least-256-bits-long!";
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "TravelApp.Api";
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "TravelApp.Client";
 
@@ -70,21 +73,18 @@ var app = builder.Build();
 
 // ── 設定 HTTP 請求管道 (Middleware 中介軟體) ───────────────────────
 
-// 開發或雲端環境啟動時：自動確保資料庫結構存在，並在全空時自動注入 seed.sql 範例資料
+// 開發或雲端環境啟動時：自動確保資料庫結構存在，並執行具等冪性 (idempotent) 的 seed.sql 確保新資料表與欄位皆同步
 try
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
 
-    if (!db.Trips.Any())
+    var seedPath = Path.Combine(app.Environment.ContentRootPath, "seed.sql");
+    if (File.Exists(seedPath))
     {
-        var seedPath = Path.Combine(app.Environment.ContentRootPath, "seed.sql");
-        if (File.Exists(seedPath))
-        {
-            var sql = File.ReadAllText(seedPath);
-            db.Database.ExecuteSqlRaw(sql);
-        }
+        var sql = File.ReadAllText(seedPath);
+        db.Database.ExecuteSqlRaw(sql);
     }
 }
 catch (Exception ex)

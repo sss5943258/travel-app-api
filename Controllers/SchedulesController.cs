@@ -29,7 +29,22 @@ public class SchedulesController(AppDbContext db, TripAuthService auth) : Contro
             return StatusCode(403, new { status = "error", message = "無編輯權限或非此旅程擁有者/共編者" });
 
         var scheduleId = Guid.NewGuid();
-        var groupId = req.GroupId ?? scheduleId; // 若未傳 groupId 則以自身 ID 作為群組起始 ID
+        var groupId = scheduleId; // 預設以新行程的 ID 作為群組起始 ID
+        if (!string.IsNullOrWhiteSpace(req.GroupId) && Guid.TryParse(req.GroupId, out var parsedGroup))
+        {
+            groupId = parsedGroup;
+        }
+
+        // 若前端未傳入 sortOrder，自動計算當天最大排序序號 + 1，避免所有行程排序疊在 0
+        int sortOrder = req.SortOrder ?? 0;
+        if (req.SortOrder == null)
+        {
+            var maxOrder = await db.Schedules
+                .Where(s => s.TripId == req.TripId && s.Day == req.Day)
+                .Select(s => (int?)s.SortOrder)
+                .MaxAsync() ?? -1;
+            sortOrder = maxOrder + 1;
+        }
 
         var schedule = new Schedule
         {
@@ -44,8 +59,8 @@ public class SchedulesController(AppDbContext db, TripAuthService auth) : Contro
             Remark = req.Remark,
             GoogleMapLink = req.GoogleMapLink,
             ImageUrl = req.ImageUrl,
-            SortOrder = req.SortOrder,
-            AltOrder = req.AltOrder
+            SortOrder = sortOrder,
+            AltOrder = req.AltOrder ?? 0
         };
 
         db.Schedules.Add(schedule);
@@ -174,7 +189,7 @@ public class SchedulesController(AppDbContext db, TripAuthService auth) : Contro
 public record AddScheduleRequest(
     Guid TripId, int Day, string? Date, string AttractionName,
     string? StartTime, string? EndTime, string? Remark,
-    string? GoogleMapLink, string? ImageUrl, int SortOrder, int AltOrder, Guid? GroupId);
+    string? GoogleMapLink, string? ImageUrl, int? SortOrder, int? AltOrder, string? GroupId);
 
 public record UpdateScheduleRequest(
     string? AttractionName, string? StartTime, string? EndTime,
