@@ -72,8 +72,6 @@ public class TripsController(AppDbContext db, TripAuthService auth) : Controller
             .Include(t => t.Collaborators)
             .FirstOrDefaultAsync(t => t.TripId == id);
 
-        bool isReadOnly = false;
-
         // 2. 找不到再找 readOnlyId (唯讀訪客分享模式)
         if (trip == null)
         {
@@ -85,19 +83,11 @@ public class TripsController(AppDbContext db, TripAuthService auth) : Controller
 
             if (trip == null)
                 return NotFound(new { error = $"找不到 tripId: {id}" });
+        }
 
-            isReadOnly = true;
-        }
-        else
-        {
-            // 若為 tripId 查詢，檢查是否具備編輯權限
-            var canEdit = await auth.CanEditAsync(trip.TripId, User);
-            if (!canEdit)
-            {
-                // 若無編輯權限，自動轉為唯讀模式瀏覽
-                isReadOnly = true;
-            }
-        }
+        // 3. 檢查當前使用者是否具備編輯權限 (若是 Owner 或 Collaborator 則為可編輯，未登入或非成員一律唯讀)
+        var canEdit = await auth.CanEditAsync(trip.TripId, User);
+        bool isReadOnly = !canEdit;
 
         // 3. 依 Day 分組並保全空天數 (Day 1 ~ Day N)
         int maxCardDay = trip.Schedules.Any() ? trip.Schedules.Max(s => s.Day) : 0;
